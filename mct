@@ -116,6 +116,74 @@ find_cycles() {
     printf '%s|%s|%s|0\n' "$current_start" "$current_end" "$cycle_days"
 }
 
+date_add() {
+    date_str="$1"
+    days="$2"
+    
+    seconds=$(date -d "$date_str" +%s)
+    new_seconds=$((seconds + days * 86400))
+    date -d "@$new_seconds" +%Y-%m-%d
+}
+
+predict() {
+    setup || return 1
+
+    [ -s "$CYCLES_FILE" ] || {
+        printf 'no cycles recorded yet\n' >&2
+        return 0
+    }
+
+    sum_gaps=0
+    gap_count=0
+    last_start=""
+    last_end=""
+    last_days=0
+
+    while IFS='|' read -r start end days gap; do
+        last_start="$start"
+        last_end="$end"
+        last_days="$days"
+
+        if [ "$gap" -gt 0 ]; then
+            sum_gaps=$(( sum_gaps + gap ))
+            gap_count=$(( gap_count + 1 ))
+        fi
+    done <<EOF
+$(find_cycles)
+EOF
+
+    [ "$gap_count" -gt 0 ] || {
+        printf 'need at least 2 cycles to predict\n' >&2
+        return 1
+    }
+
+    avg_gap=$(( sum_gaps / gap_count ))
+    
+    next_start=$(date_add "$last_end" $((avg_gap + 1)))
+
+    sum_days=0
+    cycle_count=0
+    while IFS='|' read -r start end days gap; do
+        sum_days=$(( sum_days + days ))
+        cycle_count=$(( cycle_count + 1 ))
+    done <<EOF
+$(find_cycles)
+EOF
+    
+    avg_cycle_days=$(( sum_days / cycle_count ))
+    
+    next_end=$(date_add "$next_start" $((avg_cycle_days - 1)))
+
+    printf 'last cycle: %s to %s (%s days)\n' "$last_start" "$last_end" "$last_days"
+    printf 'average cycle length: %s days (based on %s cycles)\n' "$avg_gap" "$gap_count"
+    printf 'average period duration: %s days\n' "$avg_cycle_days"
+    printf '\n'
+    printf 'predicted next cycle:\n'
+    printf '  start: %s\n' "$next_start"
+    printf '  end:   %s\n' "$next_end"
+    printf '  duration: %s days\n' "$avg_cycle_days"
+}
+
 stats() {
     setup || return 1
 
@@ -205,6 +273,10 @@ EOF
         d|delete)
             shift
             delete "$@"
+        ;;
+
+        p|predict)
+            predict
         ;;
 
         s|stats)
