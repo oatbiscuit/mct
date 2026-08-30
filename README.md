@@ -69,6 +69,7 @@ predicted next cycle:
 ```
 
 ## TODO
+- [] Add large gap anomaly checker (for pregnancies or illness) 
 - [] Add git support
 - [] Add optional gpg support
 - [] Add colour output
