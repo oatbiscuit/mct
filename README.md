@@ -39,7 +39,7 @@ The output of the file is just a list of dates that will look like this:
 ```
 
 > [!NOTE]
-> The `cycles` file will be chmod 600, and the `~/.local/shares/mct/` folder is chmod 700.
+> The `cycles` file will be `chmod 600`, and the `~/.local/share/mct/` folder is `chmod 700` for added privacy.
 
 You can view your stats with `mct s`:
 
@@ -71,6 +71,6 @@ predicted next cycle:
 ## TODO
 - [] Add large gap anomaly checker (for pregnancies or illness) 
 - [] Add git support
-- [] Add optional gpg support
+- [] Add optional gpg encryption support
 - [] Add colour output
 - [] Symptom tracking?
