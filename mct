@@ -25,6 +25,24 @@ setup() {
     chmod 600 "$CYCLES_FILE"
 }
 
+date_to_epoch() {
+    awk -v d="$1" 'BEGIN {
+        split(d, a, "-");
+        seconds = mktime(a[1] " " a[2] " " a[3] " 0 0 0");
+        print seconds;
+        exit;
+    }'
+}
+
+date_add_days() {
+    awk -v d="$1" -v n="$2" 'BEGIN {
+        split(d, a, "-");
+        seconds = mktime(a[1] " " a[2] " " a[3] " 0 0 0") + n * 86400;
+        print strftime("%Y-%m-%d", seconds);
+        exit;
+    }'
+}
+
 validate_date() {
     date_str="$1"
 
@@ -33,12 +51,29 @@ validate_date() {
         return 1
     fi
 
-    command -v date >/dev/null 2>&1 || return 0
+    if ! echo "$date_str" | awk -F- '{
+        year = $1 + 0;
+        month = $2 + 0;
+        day = $3 + 0;
 
-    date -d "$date_str" >/dev/null 2>&1 || {
-        printf 'error: invalid date: %s\n' "$date_str" >&2
+        if (month < 1 || month > 12) exit 1;
+
+        if (month == 2) {
+            if ((year % 400 == 0) || (year % 4 == 0 && year % 100 != 0))
+                max_days = 29;
+            else
+                max_days = 28;
+        } else if (month == 4 || month == 6 || month == 9 || month == 11) {
+            max_days = 30;
+        } else {
+            max_days = 31
+        }
+        if (day < 1 || day > max_days) exit 1;
+        exit 0;
+    }' 2>/dev/null; then
+        printf 'error: invalid date: %s (use YYYY-MM-DD)\n' "$date_str" >&2
         return 1
-    } 
+    fi
 
     return 0
 }
@@ -90,12 +125,14 @@ find_cycles() {
     gap=0
 
     while read -r date_str; do
+        [ -z "$date_str" ] && continue
+
         if [ -z "$prev_date" ]; then
             current_start="$date_str"
             cycle_days=1
         else
-            prev_epoch=$(date -d "$prev_date" +%s)
-            curr_epoch=$(date -d "$date_str" +%s)
+            prev_epoch=$(date_to_epoch "$prev_date")
+            curr_epoch=$(date_to_epoch "$date_str")
             diff=$(( (curr_epoch - prev_epoch) / 86400 ))
 
             if [ "$diff" -eq 1 ]; then
@@ -114,15 +151,6 @@ find_cycles() {
     # last cycle
     current_end="$prev_date"
     printf '%s|%s|%s|0\n' "$current_start" "$current_end" "$cycle_days"
-}
-
-date_add() {
-    date_str="$1"
-    days="$2"
-    
-    seconds=$(date -d "$date_str" +%s)
-    new_seconds=$((seconds + days * 86400))
-    date -d "@$new_seconds" +%Y-%m-%d
 }
 
 predict() {
@@ -159,7 +187,7 @@ EOF
 
     avg_gap=$(( sum_gaps / gap_count ))
     
-    next_start=$(date_add "$last_end" $((avg_gap + 1)))
+    next_start=$(date_add_days "$last_end" $((avg_gap + 1)))
 
     sum_days=0
     cycle_count=0
@@ -172,7 +200,7 @@ EOF
     
     avg_cycle_days=$(( sum_days / cycle_count ))
     
-    next_end=$(date_add "$next_start" $((avg_cycle_days - 1)))
+    next_end=$(date_add_days "$next_start" $((avg_cycle_days - 1)))
 
     printf 'last cycle: %s to %s (%s days)\n' "$last_start" "$last_end" "$last_days"
     printf 'average cycle length: %s days (based on %s cycles)\n' "$avg_gap" "$gap_count"
@@ -223,21 +251,21 @@ stats() {
 $cycles_data
 EOF
 
-    printf 'total days recorded: %s\n' "$total_days" >&2
-    printf 'total cycles: %s\n' "$cycle_count" >&2
-    printf 'first recorded: %s\n' "$first_day" >&2
-    printf 'last recorded: %s\n' "$last_day" >&2
+    printf 'total days recorded: %s\n' "$total_days"
+    printf 'total cycles: %s\n' "$cycle_count"
+    printf 'first recorded: %s\n' "$first_day"
+    printf 'last recorded: %s\n' "$last_day"
 
     [ "$cycle_count" -gt 0 ] && {
         avg_cycle_days=$(( sum_cycle_days / cycle_count ))
-        printf 'average cycle length: %s days\n' "$avg_cycle_days" >&2
+        printf 'average cycle length: %s days\n' "$avg_cycle_days"
     }
 
     [ "$gap_count" -gt 0 ] && {
         avg_gap=$(( sum_gaps / gap_count ))
-        printf 'average days between cycles: %s days\n' "$avg_gap" >&2
+        printf 'average days between cycles: %s days\n' "$avg_gap"
         [ -n "$min_gap" ] && [ -n "$max_gap" ] && \
-            printf 'cycle range: %s-%s days\n' "$min_gap" "$max_gap" >&2
+            printf 'cycle range: %s-%s days\n' "$min_gap" "$max_gap"
     } 
 }
 
@@ -261,7 +289,7 @@ EOF
         ;;
 
         -v|--version)
-            printf "mct %s\n" "$VERSION" >&2
+            printf "mct %s\n" "$VERSION"
             exit 0
         ;;
 
