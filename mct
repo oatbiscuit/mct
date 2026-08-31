@@ -78,6 +78,12 @@ validate_date() {
     return 0
 }
 
+create_temp_file() {
+    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$"
+    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
+    printf '%s' "$tmpfile"
+}
+
 record() {
     setup || return 1
     date_str="${1:-$(date +%Y-%m-%d)}"
@@ -103,8 +109,7 @@ delete() {
         return 1
     fi
 
-    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$"
-    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
+    tmpfile=$(create_temp_file)
 
     grep -vxF "$date_str" "$CYCLES_FILE" > "$tmpfile" || {
         printf 'error: failed to create temp file\n' >&2
@@ -169,8 +174,7 @@ predict() {
     last_end=""
     last_days=0
 
-    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$" 
-    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
+    tmpfile=$(create_temp_file) 
 
     find_cycles > "$tmpfile" || {
         rm -f "$tmpfile"
@@ -231,8 +235,7 @@ stats() {
     min_gap=""
     max_gap=""
 
-    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$"
-    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
+    tmpfile=$(create_temp_file)
 
     find_cycles > "$tmpfile" || {
         rm -f "$tmpfile"
