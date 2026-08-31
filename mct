@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh
 #
 # mct - menstrual cycle tracker in POSIX shell
 #
@@ -103,13 +103,15 @@ delete() {
         return 1
     fi
 
-    TMP_FILE=$(mktemp) || {
-        printf 'error: cannot create temp file\n' >&2
-        return 1
-    }
+    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$"
+    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
 
-    grep -vxF "$date_str" "$CYCLES_FILE" > "$TMP_FILE"
-    mv "$TMP_FILE" "$CYCLES_FILE"
+    grep -vxF "$date_str" "$CYCLES_FILE" > "$tmpfile" || {
+        printf 'error: failed to create temp file\n' >&2
+        rm -f "$tmpfile"
+        return 1 
+    }
+    mv "$tmpfile" "$CYCLES_FILE"
     printf 'deleted cycle for %s\n' "$date_str" >&2
 }
 
@@ -155,7 +157,6 @@ find_cycles() {
 
 predict() {
     setup || return 1
-
     [ -s "$CYCLES_FILE" ] || {
         printf 'no cycles recorded yet\n' >&2
         return 0
@@ -163,9 +164,20 @@ predict() {
 
     sum_gaps=0
     gap_count=0
+    sum_days=0
+    cycle_count=0
     last_start=""
     last_end=""
     last_days=0
+
+    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$" 
+    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
+
+    find_cycles > "$tmpfile" || {
+        rm -f "$tmpfile"
+        printf 'no cycle data available\n' >&2
+        return 1
+    }
 
     while IFS='|' read -r start end days gap; do
         last_start="$start"
@@ -176,9 +188,12 @@ predict() {
             sum_gaps=$(( sum_gaps + gap ))
             gap_count=$(( gap_count + 1 ))
         fi
-    done <<EOF
-$(find_cycles)
-EOF
+
+        sum_days=$(( sum_days + days ))
+        cycle_count=$(( cycle_count + 1 ))
+    done < "$tmpfile"
+
+    rm -f "$tmpfile"
 
     [ "$gap_count" -gt 0 ] || {
         printf 'need at least 2 cycles to predict\n' >&2
@@ -186,20 +201,8 @@ EOF
     }
 
     avg_gap=$(( sum_gaps / gap_count ))
-    
     next_start=$(date_add_days "$last_end" $((avg_gap + 1)))
-
-    sum_days=0
-    cycle_count=0
-    while IFS='|' read -r start end days gap; do
-        sum_days=$(( sum_days + days ))
-        cycle_count=$(( cycle_count + 1 ))
-    done <<EOF
-$(find_cycles)
-EOF
-    
     avg_cycle_days=$(( sum_days / cycle_count ))
-    
     next_end=$(date_add_days "$next_start" $((avg_cycle_days - 1)))
 
     printf 'last cycle: %s to %s (%s days)\n' "$last_start" "$last_end" "$last_days"
@@ -231,11 +234,14 @@ stats() {
     min_gap=""
     max_gap=""
 
-    cycles_data=$(find_cycles) || {
-        printf 'error: failed to retrieve cycle data\n' >&2
+    tmpfile=$(mktemp 2>/dev/null) || tmpfile="/tmp/mct.$$"
+    trap 'rm -f "$tmpfile"' EXIT INT TERM HUP
+
+    find_cycles > "$tmpfile" || {
+        rm -f "$tmpfile"
+        printf 'no cycle data available\n' >&2
         return 1
     }
-
     while IFS='|' read -r _ _ days gap; do
         cycle_count=$(( cycle_count + 1 ))
         sum_cycle_days=$(( sum_cycle_days + days ))
@@ -243,13 +249,17 @@ stats() {
         if [ "$gap" -gt 0 ]; then
             sum_gaps=$(( sum_gaps + gap ))
             gap_count=$(( gap_count + 1 ))
-            [ -z "$min_gap" ] || [ "$gap" -lt "$min_gap" ] && min_gap="$gap"
-            [ -z "$max_gap" ] || [ "$gap" -gt "$max_gap" ] && max_gap="$gap"
+            if [ -z "$min_gap" ] || [ "$gap" -lt "$min_gap" ]; then
+                min_gap="$gap"
+            fi
+            if [ -z "$max_gap" ] || [ "$gap" -gt "$max_gap" ]; then
+                max_gap="$gap"
+            fi
         fi
 
-   done <<EOF 
-$cycles_data
-EOF
+    done < "$tmpfile"
+
+    rm -f "$tmpfile"
 
     printf 'total days recorded: %s\n' "$total_days"
     printf 'total cycles: %s\n' "$cycle_count"
