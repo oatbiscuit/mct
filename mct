@@ -156,7 +156,6 @@ find_cycles() {
 }
 
 predict() {
-    setup || return 1
     [ -s "$CYCLES_FILE" ] || {
         printf 'no cycles recorded yet\n' >&2
         return 0
@@ -216,8 +215,6 @@ predict() {
 }
 
 stats() {
-    setup || return 1
-
     [ -s "$CYCLES_FILE" ] || {
         printf 'no cycles recorded yet.\n' >&2
         return 0
