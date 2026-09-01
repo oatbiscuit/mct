@@ -306,6 +306,8 @@ main() {
             cat <<EOF
 Usage: mct [OPTION] [COMMAND] [DATE]
 
+DATE format: YYYY-MM-DD (e.g., 2026-09-01)
+
 Commands:
     r, record   [DATE]      Record a cycle day (default: today)
     d, delete   [DATE]      Delete a cycle day (default: today)
