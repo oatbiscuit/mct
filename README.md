@@ -121,7 +121,7 @@ The output of the file is just a list of dates that will look like this:
 - `~/.local/share/mct/cycles` -> `600` (only you can read/write)
 
 ## TODO
-- [ ] Add large gap anomaly checker (for pregnancies or illness) 
+- [x] Add large gap anomaly checker (for pregnancies or illness) 
 - [ ] Add git support
 - [ ] Add optional gpg encryption support
 - [x] Add colour output
