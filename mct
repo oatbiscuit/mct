@@ -7,10 +7,11 @@
 
 readonly VERSION='0.1.0'
 readonly SECONDS_PER_DAY=86400
-
 readonly XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 readonly MCT_DIR="${XDG_DATA_HOME}/mct"
 readonly CYCLES_FILE="${MCT_DIR}/cycles"
+
+ANOMALY_THRESHOLD="${MCT_ANOM_THRESH:-60}"
 
 if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
     readonly C_YELLOW='\033[1;33m'
@@ -139,7 +140,7 @@ delete() {
 }
 
 # Helper: Parse cycles from the cycles file
-# Output: cycle_start|cycle_end|cycle_days|gap_to_next
+# Output: cycle_start|cycle_end|cycle_days|gap_to_next|is_anomaly
 find_cycles() {
     [ -s "$CYCLES_FILE" ] || return 1
 
@@ -165,7 +166,13 @@ find_cycles() {
             else
                 current_end="$prev_date"
                 gap=$((diff - 1))
-                printf '%s|%s|%s|%s\n' "$current_start" "$current_end" "$cycle_days" "$gap"
+                if [ "$gap" -gt "$ANOMALY_THRESHOLD" ]; then
+                    is_anomaly=1
+                else
+                    is_anomaly=0
+                fi
+
+                printf '%s|%s|%s|%s|%s\n' "$current_start" "$current_end" "$cycle_days" "$gap" "$is_anomaly"
                 current_start="$date_str"
                 cycle_days=1
             fi
@@ -175,7 +182,7 @@ find_cycles() {
 
     # last cycle
     current_end="$prev_date"
-    printf '%s|%s|%s|0\n' "$current_start" "$current_end" "$cycle_days"
+    printf '%s|%s|%s|0|0\n' "$current_start" "$current_end" "$cycle_days"
 }
 
 predict() {
@@ -188,9 +195,12 @@ predict() {
     gap_count=0
     sum_days=0
     cycle_count=0
+    normal_cycle_count=0
     last_start=""
     last_end=""
     last_days=0
+    anomaly_count=0
+    anomaly_details=""
 
     tmpfile=$(create_temp_file) 
 
@@ -199,35 +209,85 @@ predict() {
         die 'no cycle data available'
     }
 
-    while IFS='|' read -r start end days gap; do
+    while IFS='|' read -r start end days gap is_anomaly; do
         last_start="$start"
         last_end="$end"
         last_days="$days"
 
-        if [ "$gap" -gt 0 ]; then
-            sum_gaps=$(( sum_gaps + gap ))
-            gap_count=$(( gap_count + 1 ))
-        fi
-
         sum_days=$(( sum_days + days ))
         cycle_count=$(( cycle_count + 1 ))
+
+        if [ "$is_anomaly" -eq 1 ]; then
+            anomaly_count=$(( anomaly_count + 1 ))
+            anomaly_details="${anomaly_details}           - gap of ${gap} days (after cycle ${start} -> ${end})
+"
+        else
+            normal_cycle_count=$(( normal_cycle_count + 1 ))
+            if [ "$gap" -gt 0 ]; then
+                sum_gaps=$(( sum_gaps + gap ))
+                gap_count=$(( gap_count + 1 ))
+            fi
+        fi
+
     done < "$tmpfile"
 
     rm -f "$tmpfile"
 
     [ "$gap_count" -gt 0 ] || {
-        die 'need at least 2 cycles to predict'
+        if [ "$anomaly_count" -gt 0 ]; then
+            warn "only anoalous cycles found (${anomaly_count})"
+            die 'need at least 2 normal cycles to predict'
+        else
+            die 'need at least 2 cycles to predict'
+        fi
     }
 
     avg_gap=$(( sum_gaps / gap_count ))
-    next_start=$(date_add_days "$last_end" $((avg_gap + 1)))
     avg_cycle_days=$(( sum_days / cycle_count ))
+
+    last_normal_start=""
+    last_normal_end=""
+    last_normal_days=0
+    
+    tmpfile2=$(create_temp_file)
+    find_cycles > "$tmpfile2" || {
+        rm -f "$tmpfile2"
+        die 'no cycle data available'
+    }
+
+    while IFS='|' read -r start end days gap is_anomaly; do
+        if [ "$is_anomaly" -eq 0 ]; then
+            last_normal_start="$start"
+            last_normal_end="$end"
+            last_normal_days="$days"
+        fi
+    done < "$tmpfile2"
+    rm -f "$tmpfile2"
+
+    if [ -z "$last_normal_end" ]; then
+        die "no normal cycles found for prediction"
+    fi
+
+    next_start=$(date_add_days "$last_normal_end" $((avg_gap + 1)))
     next_end=$(date_add_days "$next_start" $((avg_cycle_days - 1)))
     days_until=$(( ($(date_to_epoch "$next_start") - $(date_to_epoch "$(date +%Y-%m-%d)")) / SECONDS_PER_DAY ))
     [ "$days_until" -lt 0 ] && days_until=0
 
     log 'CYCLE PREDICTION'
-    log "   last cycle:         ${last_start} -> ${last_end} (${last_days} days)" 
+
+    if [ "$anomaly_count" -gt 0 ]; then
+        warn "   ${anomaly_count} anomaly/ies detected"
+        printf '%b%s%b\n' "$C_BLUE" "${anomaly_details}" "$C_RESET" >&2
+        printf '           %b%s%b\n' "$C_BLUE" "(excluded from calculations)" "$C_RESET" >&2
+        printf ''     
+    fi
+
+    log "   last cycle:         ${last_start} -> ${last_end} (${last_days} days)"
+
+    if [ "$anomaly_count" -gt 0 ]; then
+        log "   last normal cycle:  ${last_normal_start} -> ${last_normal_end} (${last_normal_days} days)"
+    fi
+
     log "   avg length:         ${avg_gap} days (${gap_count} cycles)"
     log "   avg duration:       ${avg_cycle_days} days"
     log ''
@@ -249,11 +309,14 @@ stats() {
     last_day=$(tail -n1 "$CYCLES_FILE")
 
     cycle_count=0
+    normal_cycle_count=0
     sum_cycle_days=0
     sum_gaps=0
     gap_count=0
     min_gap=""
     max_gap=""
+    anomaly_count=0
+    anomaly_details=""
 
     tmpfile=$(create_temp_file)
 
@@ -261,21 +324,28 @@ stats() {
         rm -f "$tmpfile"
         die 'no cycle data available'
     }
-    while IFS='|' read -r _ _ days gap; do
+    
+    while IFS='|' read -r start end days gap is_anomaly; do
         cycle_count=$(( cycle_count + 1 ))
         sum_cycle_days=$(( sum_cycle_days + days ))
 
-        if [ "$gap" -gt 0 ]; then
-            sum_gaps=$(( sum_gaps + gap ))
-            gap_count=$(( gap_count + 1 ))
-            if [ -z "$min_gap" ] || [ "$gap" -lt "$min_gap" ]; then
-                min_gap="$gap"
-            fi
-            if [ -z "$max_gap" ] || [ "$gap" -gt "$max_gap" ]; then
-                max_gap="$gap"
+        if [ "$is_anomaly" -eq 1 ]; then
+            anomaly_count=$(( anomaly_count + 1 ))
+            anomaly_details="${anomaly_details}           - gap of ${gap} days (after cycle ${start} -> ${end})
+"
+        else
+            normal_cycle_count=$(( normal_cycle_count + 1 ))
+            if [ "$gap" -gt 0 ]; then
+                sum_gaps=$(( sum_gaps + gap ))
+                gap_count=$(( gap_count + 1 ))
+                if [ -z "$min_gap" ] || [ "$gap" -lt "$min_gap" ]; then
+                    min_gap="$gap"
+                fi
+                if [ -z "$max_gap" ] || [ "$gap" -gt "$max_gap" ]; then
+                    max_gap="$gap"
+                fi
             fi
         fi
-
     done < "$tmpfile"
 
     rm -f "$tmpfile"
@@ -286,9 +356,16 @@ stats() {
     log "   first recorded:     ${first_day}"
     log "   last recorded:      ${last_day}"
 
-    [ "$cycle_count" -gt 0 ] && {
-        avg_cycle_days=$(( sum_cycle_days / cycle_count ))
-        log "   avg duration:       ${avg_cycle_days} days"
+    if [ "$anomaly_count" -gt 0 ]; then
+        log ''
+        warn "   ${anomaly_count} anomaly/ies detected"
+        printf '%b%s%b\n' "$C_BLUE" "${anomaly_details}" "$C_RESET" >&2
+        printf '           %b%s%b\n' "$C_BLUE" "(excluded from calculations)" "$C_RESET" >&2
+    fi
+
+    [ "$normal_cycle_count" -gt 0 ] && {
+        avg_cycle_days=$(( sum_cycle_days / normal_cycle_count ))
+        log "   avg duration:       ${avg_cycle_days} days (${normal_cycle_count} cycles)"
     }
 
     [ "$gap_count" -gt 0 ] && {
@@ -297,7 +374,15 @@ stats() {
         if [ -n "$min_gap" ] && [ -n "$max_gap" ]; then
             log "   range:              ${min_gap} - ${max_gap} days"
         fi
-    } 
+    }
+
+    log "   excluded cycles:    ${anomaly_count} (anomalies)"
+    
+    if [ "$anomaly_count" -gt 0 ] && [ "$normal_cycle_count" -gt 0 ]; then
+        log ''
+        log "[TIP] Large gaps may indicate pregnancy, illness,"
+        log "or data gaps. Consider if these should be removed."
+    fi
 }
 
 main() {
